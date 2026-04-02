@@ -13,11 +13,11 @@ from algo.network import Network
 from algo.datastructure.located_activity import LocatedActivity, EntryPoint
 from algo.utility.event_log_splitter import EventLogSplitter
 
-LOCATION_KEY = "org:group"
-N_TRAINING = 50
-N_TEST = 1
+LOCATION_KEY = "concept:name"
+N_TRAINING = 5
+N_TEST = 10
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-SEPSIS_XES = os.path.join("/Users/christianimenkamp/Documents/Data-Repository/Community/bpi-c-2013/BPI_Challenge_2013_open_problems.xes")
+SEPSIS_XES = os.path.join("/Users/christianimenkamp/Documents/Data-Repository/Community/Road-Traffic-Fine-Management-Process/Road_Traffic_Fine_Management_Process.xes")
 
 def load_traces() -> tuple:
     splitter = EventLogSplitter(SEPSIS_XES, location_key=LOCATION_KEY)
@@ -112,16 +112,17 @@ if __name__ == '__main__':
     de_network = build_network(de_training)
     cent_network = build_network(cent_training)
 
-    de_validation_trace = de_test[0]
-    cent_validation_trace = cent_test[0]
+    for i in range(len(de_test)):
+        de_validation_trace = de_test[i]
+        cent_validation_trace = cent_test[i]
 
-    de_alignments = replay(de_network, de_validation_trace)
-    cent_alignments = replay(cent_network, cent_validation_trace)
+        de_alignments = replay(de_network, de_validation_trace)
+        cent_alignments = replay(cent_network, cent_validation_trace)
 
-    _assert_equality_of_alignments(de_alignments, cent_alignments)
+        _assert_equality_of_alignments(de_alignments, cent_alignments)
 
-    print("Event\tDecentralized Alignment\tCentralized Alignment")
-    for i in range(len(de_alignments)):
-        print(f"{i}\t{de_alignments[i]}\t{cent_alignments[i]}")
+        print("Event\tDecentralized Alignment\tCentralized Alignment")
+        for i in range(len(de_alignments)):
+            print(f"{i}\t{de_alignments[i]}\t{cent_alignments[i]}")
     
 

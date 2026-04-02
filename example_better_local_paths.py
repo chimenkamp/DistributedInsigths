@@ -111,30 +111,6 @@ for i in range(len(de_alignments)):
         diff = cc - dc
         print(f"  ** Distributed is {'LOWER' if diff > 0 else 'HIGHER'} by {abs(diff)} **")
 
-
-
-
-
-#
-
-
-
-#
-
-#
-
-
-
-#
-
-
-
-
-
-
-
-
-
 print("\n\n" + "=" * 72)
 print("EXAMPLE 2: Skipped intermediate at remote location")
 print("=" * 72)
