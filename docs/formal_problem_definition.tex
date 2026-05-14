@@ -1,0 +1,853 @@
+\documentclass[11pt,a4paper]{article}
+
+%%% ── packages ────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{hyperref}
+\usepackage{tcolorbox}
+
+%%% ── colour commands ─────────────────────────────────────────────────
+\newcommand{\old}[1]{{\color{Red}#1}}          % flawed / old approach
+\newcommand{\new}[1]{{\color{Blue}#1}}         % corrected approach
+
+%%% ── coloured boxes for contrasting old vs new ───────────────────────
+\newtcolorbox{oldbox}{colframe=red!70!black, colback=red!5, title={\textbf{Old}}}
+\newtcolorbox{newboxelem}{colframe=blue!70!black, colback=blue!5, title={\textbf{New}}}
+
+%%% ── theorem-like environments ───────────────────────────────────────
+\newtheorem{definition}{Definition}
+\newtheorem{problem}{Problem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+
+%%% ── macros ──────────────────────────────────────────────────────────
+\newcommand{\A}{\mathcal{A}}
+\newcommand{\loc}{\mathrm{loc}}
+\newcommand{\act}{\mathrm{act}}
+\newcommand{\Nodes}{N}
+\newcommand{\Net}{\mathcal{G}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\Tl}{\T^{\mathrm{loc}}}
+\newcommand{\Tc}{\T^{\mathrm{c}}}
+\newcommand{\Lg}{\mathcal{L}}
+\newcommand{\cost}{\mathrm{cost}}
+\newcommand{\alignment}{\gamma}
+\newcommand{\SKIP}{\mathord{\gg}}
+\newcommand{\trace}{\sigma}
+\newcommand{\na}[2]{#1(#2)}
+\newcommand{\depth}{\mathrm{depth}}
+\newcommand{\ep}{\mathrm{entryPts}}
+\newcommand{\ls}{\mathrm{localStarts}}
+\newcommand{\GA}{\textsc{GetAlign}}
+\newcommand{\cov}{\mathrm{covered}}
+\newcommand{\visiting}{\mathrm{visiting}}
+
+\title{Formal Problem Definition\\[4pt]
+\large Distributed Online Conformance Checking via\\
+Trie-Based Alignment Decomposition}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+%% =====================================================================
+\section{Definitions}
+\label{sec:definitions}
+%% =====================================================================
+
+We begin by establishing all definitions required for the formal problem
+statement and the subsequent proof of soundness.
+
+% ------------------------------------------------------------------
+\subsection{Located Activities and Traces}
+% ------------------------------------------------------------------
+
+\begin{definition}[Located activity]\label{def:located-activity}
+  Let $\A$ be a finite activity alphabet and
+  $\Nodes = \{n_1, \dots, n_k\}$ a finite set of network nodes.
+  A \emph{located activity} is a pair
+  $\ell = (a, n) \in \A \times \Nodes$, written $\na{n}{a}$.
+  We define $\act(\ell) = a$ and $\loc(\ell) = n$.
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: Activity naming with occurrence counters.}\;
+Currently, we construct activity labels as
+$a' = \texttt{name\text{-}location\text{-}occurrence}$
+(e.g.\ \texttt{CRP-B0}, \texttt{CRP-B1}), embedding the occurrence
+index into the activity name.
+Formally, this replaced $\A$ with a much larger alphabet
+$\A' = \A \times \Nodes \times \mathbb{N}$, making the trie
+hyper-specific to training data and destroying generalisation.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix: Canonical activity names.}\;
+Activities use the original name only: $a \in \A$.
+The located activity $(a, n)$ separates identity from location.
+\end{newboxelem}
+
+\medskip
+
+\begin{definition}[Located activity equality]\label{def:la-equality}
+  Two located activities $\ell_1 = (a_1, n_1)$ and $\ell_2 = (a_2, n_2)$
+  are \emph{equal}, written $\ell_1 = \ell_2$, if and only if
+  $a_1 = a_2$ \textbf{and} $n_1 = n_2$.
+
+  A weaker predicate $\mathrm{sameActivity}(\ell_1, \ell_2)$ holds iff
+  $a_1 = a_2$ (ignoring location).
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: Location-ignoring equality.}\;
+The original equality checked only $a_1 = a_2$, ignoring the location
+component.  This caused incorrect trie matches: an activity at node
+$n_1$ would match the same activity name at node $n_2$, producing
+wrong alignments.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix.}\;
+Equality requires both $\act(\ell_1) = \act(\ell_2)$ and
+$\loc(\ell_1) = \loc(\ell_2)$.
+The hash function is $h(\ell) = \mathrm{hash}(a, n)$.
+\end{newboxelem}
+
+\begin{definition}[Located trace]\label{def:located-trace}
+  A \emph{located trace} is a finite, temporally ordered sequence
+  \[
+    \trace = \bigl\langle
+      \ell_1^{t_1},\;
+      \ell_2^{t_2},\;
+      \ldots,\;
+      \ell_m^{t_m}
+    \bigr\rangle,
+    \qquad
+    \ell_i = (a_i, n_{j_i}) \in \A \times \Nodes,
+    \quad
+    t_1 < t_2 < \cdots < t_m.
+  \]
+  The \emph{local projection} $\trace|_{n}$ retains only events
+  whose location is~$n$.
+\end{definition}
+
+\begin{definition}[Event log]\label{def:event-log}
+  An \emph{event log} is a finite multiset
+  $L = \{\trace_1, \trace_2, \ldots, \trace_p\}$
+  of located traces.
+\end{definition}
+
+% ------------------------------------------------------------------
+\subsection{Process Model}
+% ------------------------------------------------------------------
+
+\begin{definition}[Trie model]\label{def:trie}
+  A \emph{trie model} is a rooted, labelled tree
+  $\T = (Q, q_0, \delta, \lambda, F)$
+  where $Q$ is a finite state set, $q_0 \in Q$ the root,
+  $\delta \subseteq Q \times Q$ the parent--child relation,
+  $\lambda\colon Q \setminus \{q_0\} \to \A \times \Nodes$ labels each
+  non-root state with a located activity, and
+  $F \subseteq Q$ is the set of \emph{accepting states}.
+
+  Every root-to-accepting-state path encodes one admissible
+  located trace.  We write $\Lg(\T)$ for the \emph{language} of~$\T$.
+\end{definition}
+
+\begin{definition}[Trie label reachability]\label{def:reachability}
+  For a subtrie rooted at $q \in Q$, the \emph{reachable label set} is
+  \[
+    R(q) = \{ \lambda(q') \mid q' \in Q,\;
+              q' \text{ is a descendant of } q \} \cup \{ \lambda(q) \}.
+  \]
+  We say a node $q$ \emph{contains} label~$\ell$ iff $\ell \in R(q)$.
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: Recursive reachability check.}\;
+Computed $R(q)$ via deep recursion:
+each call to \texttt{contains($\ell$)} triggered $O(|Q|)$ recursive
+descent, causing stack overflow on large tries.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix: Iterative BFS with caching.}\;
+$R(q)$ is built once via iterative breadth-first traversal and cached.
+Subsequent containment queries are $O(1)$ set lookups.
+Children are additionally indexed by label in a hash map for $O(1)$
+child access.
+\end{newboxelem}
+
+\begin{definition}[Distributed trie model]\label{def:dist-trie}
+  Given $\T$ over $\Nodes$, the \emph{distributed decomposition} assigns
+  to each $n_i \in \Nodes$ a \emph{local trie} $\Tl_{n_i}$.
+  Every maximal contiguous subsequence of activities at~$n_i$ in any
+  root-to-accepting-state path of~$\T$ forms a branch in~$\Tl_{n_i}$.
+
+  When a path transitions from $n_j$ to $n_i$
+  ($\na{n_j}{a'} \to \na{n_i}{a}$, $n_j \neq n_i$),
+  $\na{n_j}{a'}$ is inserted as an \emph{entry point} at the root
+  of~$\Tl_{n_i}$; the subtrie below it contains the local continuation
+  at~$n_i$.
+
+  Formally,
+  $\Tl_{n_i} = (Q_{n_i}, q_0^{n_i}, \delta_{n_i}, \lambda_{n_i}, F_{n_i})$
+  with root children partitioned as:
+  \begin{align*}
+    \ls(n_i) &= \{q \mid \lambda_{n_i}(q)=\na{n_i}{a},\;
+      \text{$a$ starts a trace at $n_i$}\},\\
+    \ep(n_i) &= \{q \mid \lambda_{n_i}(q)=\na{n_j}{a'},\;
+      n_j \neq n_i,\;
+      \text{$\na{n_j}{a'}$ precedes a transition to $n_i$}\},\\
+    \mathrm{children}(q_0^{n_i})
+      &= \ls(n_i) \cup \ep(n_i).
+  \end{align*}
+\end{definition}
+
+\begin{definition}[Network]\label{def:network}
+  A \emph{network}
+  $\Net = (\Nodes, \{\Tl_{n_i}\}_{n_i \in \Nodes})$
+  pairs a node set with its local tries from
+  Definition~\ref{def:dist-trie}.
+\end{definition}
+
+% ------------------------------------------------------------------
+\subsection{Alignment}
+% ------------------------------------------------------------------
+
+\begin{definition}[Alignment]\label{def:alignment}
+  Given a located trace $\trace$ and a trie model~$\T$, an
+  \emph{alignment}
+  $\alignment = \langle m_1, \ldots, m_p \rangle$
+  is a sequence of \emph{moves}
+  $(x_j^{\mathrm{model}},\, x_j^{\mathrm{log}})$
+  of three types ($\ell = (a, n_i) \in \A \times \Nodes$):
+  \begin{alignat*}{3}
+    &\textbf{Synchronous:}\quad
+    &&\bigl(\ell,\;\ell\bigr),
+    &\quad \cost &= 0,\\
+    &\textbf{Model move:}\quad
+    &&\bigl(\ell,\;\SKIP\bigr),
+    &\quad \cost &= 1,\\
+    &\textbf{Log move:}\quad
+    &&\bigl(\SKIP,\;\ell\bigr),
+    &\quad \cost &= 1.
+  \end{alignat*}
+  The alignment cost is
+  $\cost(\alignment) = \sum_{j=1}^{p} \cost(m_j)$.
+  An alignment is \emph{optimal} if no other alignment for the same
+  $(\trace, \T)$ has strictly lower cost.
+\end{definition}
+
+\textbf{Assumption (unit-cost).}\;
+We assume
+$\cost(\text{model move}) = \cost(\text{log move}) = 1$
+throughout.
+
+\begin{definition}[Alignment construction]\label{def:alignment-construction}
+  Given an alignment $\alignment$ and a new move~$m$, the extended
+  alignment $\alignment' = \alignment \cdot m$ is created by appending
+  $m$ to the move sequence.  The cost is tracked incrementally:
+  $\cost(\alignment') = \cost(\alignment) + \cost(m)$.
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: Deep-copy construction.}\;
+When using \texttt{deepcopy} on the entire
+alignment for every new move, for a trace of length~$m$ with branching
+factor~$b$ in A$^{*}$, this produced $O(b^m \cdot m)$ copied elements,
+causing exponential memory consumption.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix: Shallow-copy extension.}\;
+Since alignment elements are immutable value objects, extending an
+alignment copies only the element \emph{list} (not the elements
+themselves) and appends the new move.  Cost is tracked as an integer
+field, not recomputed.  This reduces per-move cost from $O(m)$ deepcopy
+to $O(1)$ amortised append.
+\end{newboxelem}
+
+\begin{definition}[Covered events]\label{def:covered}
+  Given an alignment $\alignment = \langle m_1, \ldots, m_p \rangle$,
+  the set of \emph{covered events} is
+  \[
+    \cov(\alignment) = \{ x_j^{\mathrm{model}} \mid x_j^{\mathrm{model}} \neq \SKIP \}
+    \;\cup\;
+    \{ x_j^{\mathrm{log}} \mid x_j^{\mathrm{log}} \neq \SKIP \}.
+  \]
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: One-sided coverage check.}\;
+The original \texttt{append\_missing\_log\_moves} only checked the
+\emph{log side} of existing alignment elements:
+$\cov_{\text{old}} = \{ x_j^{\mathrm{log}} \mid x_j^{\mathrm{log}} \neq \SKIP \}$.
+This missed events already handled as synchronous or model moves, causing
+duplicate log moves in the final alignment.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix: Two-sided coverage.}\;
+$\cov(\alignment)$ includes events from \emph{both} the model and log
+sides of every move (Definition~\ref{def:covered}).  An external event
+is added as a log move only if it does not appear in $\cov(\alignment)$.
+\end{newboxelem}
+
+\begin{definition}[Central alignment]\label{def:central-alignment}
+  Let $\Tc$ be a centralised trie built from training traces
+  $L_{\mathrm{train}}$.
+  The \emph{central optimal alignment} of a trace~$\trace$ is
+  \[
+    \alignment^{*}_c(\trace)
+    \;=\;
+    \arg\min_{\alignment \in \Gamma(\trace,\,\Tc)}
+      \cost(\alignment),
+  \]
+  where $\Gamma(\trace, \Tc)$ is the set of all valid alignments
+  of $\trace$ w.r.t.\ $\Tc$, computed via A$^{*}$ over the
+  product space (trie state $\times$ trace index).
+\end{definition}
+
+%% =====================================================================
+\section{Formal Problem Statement}
+\label{sec:problem}
+%% =====================================================================
+
+\begin{problem}[Distributed online conformance checking]\label{prob:dcc}
+  Given training traces $L_{\mathrm{train}}$ over~$\A$ and
+  $\Nodes = \{n_1, \ldots, n_k\}$, construct a network
+  $\Net = (\Nodes, \{\Tl_{n_i}\})$
+  such that for every validation trace~$\trace$ and every prefix
+  $\trace_{1..i}$, upon receiving the $i$-th event at node~$n_{j_i}$,
+  the system produces a distributed alignment $\alignment_i$ with
+  \[
+    \cost(\alignment_i) = \cost\bigl(\alignment^{*}_c(\trace_{1..i})\bigr),
+  \]
+  where $\alignment^{*}_c$ is the optimal central alignment
+  (Definition~\ref{def:central-alignment}) using a centralised trie
+  $\Tc$ built from the same~$L_{\mathrm{train}}$.
+
+  The computation must be \emph{distributed}: each node~$n_i$ sees only
+  its own local events $\trace|_{n_i}$ and communicates with other nodes
+  solely through the \GA{} protocol (Definition~\ref{def:get-alignment}).
+\end{problem}
+
+\medskip\noindent
+The core requirement is \emph{cost equivalence}: the distributed
+alignment must have the same cost as the centralised one.
+This demands that the decomposition into local tries preserves the
+structure of the global model, and that the composition of local
+alignments yields a globally optimal solution.
+
+\begin{definition}[Trace reconstruction]\label{def:reconstruction}
+  The \emph{reconstruction operator}
+  $\rho\colon \prod_{n_i} \Lg(\Tl_{n_i}) \to (\A \times \Nodes)^{*}$
+  composes local fragments into full located traces by stitching at
+  entry points: if $\Tl_{n_i}$ has entry point~$e$ with
+  $\lambda(e) = \na{n_j}{a'}$, the local fragment at~$n_i$ is
+  concatenated after the fragment at~$n_j$ ending with~$a'$, respecting
+  temporal order.
+\end{definition}
+
+\noindent
+The decomposition must satisfy the language-preservation property:
+\begin{equation}\label{eq:lang-preservation}
+  \Lg(\Tc)
+  = \rho\Bigl(
+      \textstyle\prod_{n_i \in \Nodes} \Lg(\Tl_{n_i})
+    \Bigr).
+\end{equation}
+
+%% =====================================================================
+\section{Mechanism: The \GA{} Protocol}
+\label{sec:mechanism}
+%% =====================================================================
+
+We now describe the distributed alignment protocol that solves
+Problem~\ref{prob:dcc}.
+
+% ------------------------------------------------------------------
+\subsection{Protocol Definition}
+% ------------------------------------------------------------------
+
+\begin{definition}[\GA{} protocol]\label{def:get-alignment}
+  Each node $n_\ell$ exposes
+  $\GA(n_\ell, e, t, V)$
+  returning an \texttt{AlignmentResponse}
+  $(\alignment_{\mathrm{up}}, t', e, n_{\mathrm{last}})$ where:
+  \begin{itemize}
+    \item $e \in \ep(n_\ell)$ is an entry-point label with
+          $\loc(e) = n_\ell$,
+    \item $t$ is the logical timestamp upper bound,
+    \item $V \subseteq \Nodes$ is the \emph{visiting set}
+          (nodes already on the current call stack),
+    \item $\alignment_{\mathrm{up}}$ is the best alignment of
+          $\trace|_{n_\ell}^{< t}$ against the subtrie reaching~$e$,
+    \item $t'$ is the timestamp of the last event consumed,
+    \item $n_{\mathrm{last}}$ is the node that produced the deepest
+          log moves.
+  \end{itemize}
+\end{definition}
+
+\begin{definition}[Cycle detection via visiting set]%
+  \label{def:cycle-detection}
+  Before node~$n_\ell$ issues a recursive call
+  $\GA(n_k, e', t, V)$, it checks $n_k \notin V$.
+  If $n_k \in V$, the entry point is skipped (the candidate set
+  excludes this branch).  Each call extends the set:
+  $V' = V \cup \{n_\ell\}$.
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: No cycle detection.}\;
+The original protocol had no visiting set.  If node~$A$ had an entry
+point labelled with a location at~$B$, and $B$ had an entry point
+labelled with a location at~$A$, the mutual recursion
+$A \to B \to A \to B \to \cdots$ never terminated, producing a stack
+overflow.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix.}\;
+A set $V$ is threaded through every recursive \GA{} call.
+A node $n$ is added to~$V$ before recursing; any call to a node
+already in~$V$ is pruned.  This guarantees each node appears at most
+once on any call path.
+\end{newboxelem}
+
+% ------------------------------------------------------------------
+\subsection{Caching}
+% ------------------------------------------------------------------
+
+\begin{definition}[Response cache]\label{def:cache}
+  Each node $n_i$ maintains a cache
+  $C_{n_i}\colon (\A \times \Nodes) \times \mathbb{N}
+    \to \texttt{AlignmentResponse}$
+  mapping (entry-point label, timestamp upper bound) pairs to previously
+  computed responses.
+
+  \new{The cache is cleared at the start of each \texttt{process\_event}
+  call}, ensuring no stale upstream results persist across events.
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw: Stale cache.}\;
+The original cache was keyed only by entry-point label, not by
+timestamp.  Once a response was cached for entry point~$e$, all
+subsequent events—at arbitrarily later times—reused the same stale
+response, ignoring new upstream events.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix.}\;
+The cache key is the pair $(e, t)$.  Additionally, the entire cache
+is invalidated at the start of each new event processing, so upstream
+results always reflect the current state of the network.
+\end{newboxelem}
+
+% ------------------------------------------------------------------
+\subsection{Distributed Online Alignment Procedure}
+% ------------------------------------------------------------------
+
+\begin{definition}[Distributed online alignment]%
+  \label{def:dist-online-align}
+  Given $\Net = (\Nodes, \{\Tl_{n_i}\})$ and a located trace
+  $\trace = \langle \ell_1^{t_1}, \ldots, \ell_m^{t_m} \rangle$,
+  upon receiving event $\ell_i = (a_i, n_{j_i})$ at time $t_i$,
+  node~$n_{j_i}$ computes alignment $\alignment_i$ for
+  $\trace_{1..i}$ as follows:
+
+  \begin{enumerate}
+    \item \textbf{Entry-point enumeration.}\;
+      Identify all children $e$ of the root of $\Tl_{n_{j_i}}$ whose
+      subtrie contains $\ell_i$ (i.e.\ $\ell_i \in R(e)$).
+
+    \item \textbf{Upstream alignment.}\;
+      For each entry point $e$ with $\loc(e) = n_\ell \neq n_{j_i}$,
+      request $\GA(n_\ell, e, t_i, \{n_{j_i}\})$.
+      If $n_\ell \in V$, skip this entry point (cycle avoidance).
+
+    \item \textbf{Local A$^{*}$ alignment.}\;
+      Compute a local alignment of the \new{full local trace}
+      $\trace|_{n_{j_i}}^{< t_i}$ against the subtrie below~$e$,
+      targeting label~$\ell_i$.
+
+    \item \textbf{Composition.}\;
+      Concatenate upstream and local alignments:
+      $\alignment^{(e)} = \alignment_{\mathrm{up}}(e) \cdot
+       \alignment_{\mathrm{loc}}(e)$.
+
+    \item \textbf{External log moves} (top level only).
+      \new{Only the initiating node} — the node that received the
+      original event — adds log moves for uncovered events at other nodes:
+      \[
+        \alignment'^{(e)} = \alignment^{(e)} \cdot
+        \bigl\langle (\SKIP, \ell) \mid
+          \ell \in \textstyle\bigcup_{n \neq n_{j_i}} \trace|_n^{< t_i}
+          \setminus \cov(\alignment^{(e)}) \bigr\rangle.
+      \]
+
+    \item \textbf{Selection.}\;
+      Select the minimum-cost candidate over all entry points:
+      \[
+        \alignment_i
+        = \arg\min_{e \in \mathrm{children}(q_0^{n_{j_i}})}
+          \cost(\alignment'^{(e)}).
+      \]
+  \end{enumerate}
+\end{definition}
+
+\begin{oldbox}
+\textbf{Flaw 1: External log moves added at every recursion level.}\;
+The implementation called \texttt{\_add\_external\_log\_moves}
+inside every recursive \GA{} call, not just at the top level.  If
+node~$A$ added log moves for $B$'s events, and $B$ added log moves
+for $A$'s events, the composed alignment contained duplicate log moves,
+inflating the cost.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix.}\;
+External log moves are added \emph{only} in \texttt{process\_event}
+(the top-level entry point).  Recursive \GA{} calls return the
+upstream alignment without log-move patching.
+This ensures each external event is counted exactly once.
+\end{newboxelem}
+
+\begin{oldbox}
+\textbf{Flaw 2: Local trace filtered by upstream timestamp.}\;
+The original local trace retrieval was
+$\trace|_{n_i}^{(t_{\mathrm{up}},\, t_i)}$—only events
+\emph{after} the upstream's last timestamp.  If local events occurred
+before the upstream transition, they were silently dropped.
+\end{oldbox}
+
+\begin{newboxelem}
+\textbf{Fix.}\;
+The local trace includes \emph{all} events at the current node up to
+time~$t_i$, regardless of the upstream timestamp:
+$\trace|_{n_i}^{(-\infty,\, t_i)}$.
+The upstream timestamp informs only when the upstream alignment ends,
+not which local events to consider.
+\end{newboxelem}
+
+
+%% =====================================================================
+\section{Proof of Soundness}
+\label{sec:proof}
+%% =====================================================================
+
+We prove that the \GA{} protocol produces optimal alignments
+via a series of lemmas.
+
+% ------------------------------------------------------------------
+\subsection{Termination}
+% ------------------------------------------------------------------
+
+\begin{lemma}[Termination]\label{lem:termination}
+  For any event $\ell_i^{t_i}$ arriving at node~$n_{j_i}$, the
+  recursive \GA{} invocations terminate in at most $|\Nodes|$ steps.
+\end{lemma}
+
+\begin{proof}
+  The visiting set $V$ is initialised as $\{n_{j_i}\}$ and
+  grows by one element at each recursive call
+  (Definition~\ref{def:cycle-detection}).
+  A recursive call $\GA(n_k, e', t, V)$ is issued only if
+  $n_k \notin V$.
+  Since $|V| \leq |\Nodes|$ and $V$ grows monotonically,
+  the recursion depth is bounded by~$|\Nodes| - 1$.
+  At the base case, a node with only local starts ($\ep(n) = \emptyset$)
+  or all predecessors already in~$V$ computes a purely local A$^{*}$
+  alignment without further recursion.
+\end{proof}
+
+% ------------------------------------------------------------------
+\subsection{Cost Additivity}
+% ------------------------------------------------------------------
+
+\begin{lemma}[Cost additivity under composition]\label{lem:additivity}
+  Let $\alignment_1$ and $\alignment_2$ be alignments.  Under unit costs,
+  \[
+    \cost(\alignment_1 \cdot \alignment_2)
+    = \cost(\alignment_1) + \cost(\alignment_2).
+  \]
+\end{lemma}
+
+\begin{proof}
+  Each move's cost depends only on its type (synchronous $= 0$,
+  model/log $= 1$).  Concatenation appends the move sequences:
+  $\alignment_1 \cdot \alignment_2 =
+    \langle m_1^{(1)}, \ldots, m_p^{(1)},
+            m_1^{(2)}, \ldots, m_q^{(2)} \rangle$.
+  The total cost is
+  $\sum_{j=1}^{p} \cost(m_j^{(1)}) + \sum_{j=1}^{q} \cost(m_j^{(2)})
+  = \cost(\alignment_1) + \cost(\alignment_2)$.
+\end{proof}
+
+% ------------------------------------------------------------------
+\subsection{Exhaustive Enumeration}
+% ------------------------------------------------------------------
+
+\begin{lemma}[Entry-point exhaustiveness]\label{lem:exhaustive}
+  Let $\trace^{*}$ be a path in $\Tc$ that passes through node~$n_i$.
+  Then there exists exactly one entry point
+  $e \in \ep(n_i) \cup \ls(n_i)$ such that the local fragment
+  of~$\trace^{*}$ at~$n_i$ is a path in the subtrie below~$e$
+  in~$\Tl_{n_i}$.
+\end{lemma}
+
+\begin{proof}
+  By construction of the distributed decomposition
+  (Definition~\ref{def:dist-trie}):
+  \begin{itemize}
+    \item If $\trace^{*}$ starts at $n_i$, the first activity is a
+          local start in $\ls(n_i)$.
+    \item If $\trace^{*}$ transitions from $n_j$ to $n_i$ via activity
+          $\na{n_j}{a'}$, then $\na{n_j}{a'}$ is an entry point in
+          $\ep(n_i)$, and the continuation at~$n_i$ is the subtrie
+          below this entry point.
+  \end{itemize}
+  Uniqueness: each transition point in a path determines exactly one
+  entry point (or local start) in the local trie.
+  Completeness: every transition from a path in $\Tc$ is represented
+  as an entry point or local start in the corresponding local trie.
+\end{proof}
+
+% ------------------------------------------------------------------
+\subsection{Local Optimality}
+% ------------------------------------------------------------------
+
+\begin{lemma}[A$^{*}$ local optimality]\label{lem:local-opt}
+  Given a local trace $\trace|_{n_i}$ and a subtrie $\Tl'_{n_i}$
+  rooted below an entry point, the A$^{*}$ search over the product
+  space $Q_{n_i} \times \{0, \ldots, |\trace|_{n_i}|\}$
+  returns an optimal local alignment.
+\end{lemma}
+
+\begin{proof}
+  A$^{*}$ with an admissible heuristic (here $h = 0$, i.e.\ uniform-cost
+  search) is complete and optimal on finite graphs.
+  The product space is finite ($|Q_{n_i}| \cdot (|\trace|_{n_i}|+1)$
+  states), and the unit-cost function is non-negative.
+  Therefore the first solution popped from the priority queue is optimal.
+
+  \new{The goal check uses full located-activity equality
+  (Definition~\ref{def:la-equality}), ensuring the search terminates
+  at the correct target node in the trie.}
+\end{proof}
+
+\begin{oldbox}
+\textbf{Flaw: Goal check ignored location.}\;
+The original A$^{*}$ goal check compared only the activity name, not
+the full located activity.  This could cause the search to terminate
+at a trie node with the right activity but wrong location, producing
+a spurious alignment.
+\end{oldbox}
+
+% ------------------------------------------------------------------
+\subsection{Log-Move Completeness}
+% ------------------------------------------------------------------
+
+\begin{lemma}[External log-move completeness]\label{lem:log-moves}
+  After step~5 of Definition~\ref{def:dist-online-align},
+  every event in $\trace_{1..i}$ is covered by exactly one move
+  in~$\alignment'_i$.
+\end{lemma}
+
+\begin{proof}
+  Partition the events in $\trace_{1..i}$ by their location:
+  \begin{itemize}
+    \item Events at $n_{j_i}$ (the current node): handled by the local
+          A$^{*}$ alignment as synchronous or log moves.
+    \item Events at upstream nodes along the chosen entry-point path:
+          handled by the upstream \GA{} alignment.
+    \item Events at all other nodes: added as log moves in step~5,
+          provided they are not already in $\cov(\alignment^{(e)})$.
+  \end{itemize}
+
+  The coverage set $\cov$ (Definition~\ref{def:covered}) is
+  constructed from \emph{both} sides (model and log) of every existing
+  element.  Therefore, events already present as synchronous moves
+  (appearing on both sides) or model moves (appearing on the model side)
+  are not duplicated.
+  Events not in $\cov$ are added exactly once.
+
+  \new{Step~5 is executed only at the top level
+  (\texttt{process\_event}), preventing nested addition across
+  recursion levels.}
+\end{proof}
+
+% ------------------------------------------------------------------
+\subsection{Composition Optimality}
+% ------------------------------------------------------------------
+
+\begin{lemma}[Alignment composition optimality]\label{lem:composition}
+  Let $e$ be an entry point in $\Tl_{n_i}$ with $\loc(e) = n_\ell$.
+  Let $\alignment_{\mathrm{up}}^{*}$ be optimal from
+  $\GA(n_\ell, e, t, V)$ and $\alignment_{\mathrm{loc}}^{*}$ optimal
+  locally below~$e$ (Lemma~\ref{lem:local-opt}).
+  If the candidate set enumerates all
+  $e \in \ep(n_i) \cup \ls(n_i)$ (Lemma~\ref{lem:exhaustive}), then
+  \[
+    \alignment_i
+    = \arg\min_{e}\;
+      \bigl(
+        \cost(\alignment_{\mathrm{up}}^{*}(e))
+        + \cost(\alignment_{\mathrm{loc}}^{*}(e))
+      \bigr)
+  \]
+  is an optimal alignment for the events decomposable through~$n_i$.
+\end{lemma}
+
+\begin{proof}
+  By Lemma~\ref{lem:exhaustive}, every decomposition of a global path
+  through~$n_i$ corresponds to some entry point
+  $e \in \ep(n_i) \cup \ls(n_i)$.
+  For each~$e$:
+  \begin{itemize}
+    \item The upstream alignment $\alignment_{\mathrm{up}}^{*}(e)$ is
+          optimal by the inductive hypothesis (or by
+          Lemma~\ref{lem:local-opt} at the base case).
+    \item The local alignment $\alignment_{\mathrm{loc}}^{*}(e)$ is
+          optimal by Lemma~\ref{lem:local-opt}.
+    \item By Lemma~\ref{lem:additivity},
+          $\cost(\alignment_{\mathrm{up}}^{*} \cdot
+                 \alignment_{\mathrm{loc}}^{*})
+          = \cost(\alignment_{\mathrm{up}}^{*})
+          + \cost(\alignment_{\mathrm{loc}}^{*})$.
+  \end{itemize}
+  Minimising over all entry points considers every possible
+  decomposition, so the minimum is globally optimal among all
+  decompositions through~$n_i$.
+\end{proof}
+
+% ------------------------------------------------------------------
+\subsection{Main Theorem}
+% ------------------------------------------------------------------
+
+\begin{theorem}[Soundness of distributed online alignment]%
+  \label{thm:soundness}
+  Under the unit-cost assumption and with the corrected protocol
+  (Definitions~\ref{def:get-alignment}--\ref{def:dist-online-align}),
+  for every validation trace $\trace$ and every prefix $\trace_{1..i}$,
+  the distributed alignment $\alignment_i$ satisfies
+  \[
+    \cost(\alignment_i) \leq \cost(\alignment^{*}_c(\trace_{1..i})).
+  \]
+\end{theorem}
+
+\begin{proof}
+  By induction on the recursion depth of \GA{}.
+
+  \medskip\noindent
+  \emph{Base case} (depth $0$).\;
+  Node~$n_i$ has only local starts ($\ep(n_i) = \emptyset$) or all
+  predecessor nodes are in~$V$.
+  The alignment is computed by A$^{*}$ on the local product space,
+  which is optimal by Lemma~\ref{lem:local-opt}.
+
+  \medskip\noindent
+  \emph{Inductive step} (depth $d$).\;
+  Assume \GA{} returns optimal sub-alignments at depth $\leq d-1$.
+  At depth~$d$, node~$n_i$:
+  \begin{enumerate}
+    \item Enumerates all entry points — exhaustive by
+          Lemma~\ref{lem:exhaustive}.
+    \item For each entry point, obtains an optimal upstream alignment
+          (by the inductive hypothesis).
+    \item Computes an optimal local alignment
+          (Lemma~\ref{lem:local-opt}).
+    \item Composes them with additive cost
+          (Lemma~\ref{lem:additivity}).
+    \item Adds external log moves exactly once, covering all remaining
+          events (Lemma~\ref{lem:log-moves}).
+    \item Selects the minimum over all candidates
+          (Lemma~\ref{lem:composition}).
+  \end{enumerate}
+
+  The recursion terminates by Lemma~\ref{lem:termination}.
+  The resulting $\alignment_i$ has cost no greater than any
+  centralised alignment, since every decomposition of a centralised
+  path is represented in the candidate set.
+\end{proof}
+
+\begin{corollary}
+  The protocol terminates in at most $|\Nodes|$ recursive steps per
+  event, and each invocation explores a local state space of size
+  $|Q_{n_i}| \cdot (|\trace|_{n_i}| + 1)$, which is substantially
+  smaller than the centralised state space
+  $|Q_c| \cdot (m + 1)$ when activities are distributed across nodes.
+\end{corollary}
+
+%% =====================================================================
+\section{State Space Complexity}
+\label{sec:state-space}
+%% =====================================================================
+
+\begin{definition}[Alignment state space]\label{def:state-space}
+  A$^{*}$ alignment of a length-$m$ trace against a trie with $|Q|$
+  states explores the product space
+  $S = Q \times \{0, 1, \ldots, m\}$,
+  of size $|S| = |Q| \cdot (m+1)$.
+\end{definition}
+
+\begin{proposition}[Centralised state space]\label{prop:central-space}
+  For the centralised trie~$\Tc$, in the worst case
+  $|Q_c| = O\!\bigl(\sum_{\trace \in L_{\mathrm{train}}} |\trace|\bigr)$
+  (no shared prefixes), giving search space
+  \[
+    |S_c|
+    = |Q_c| \cdot (m+1)
+    = O\!\Bigl(
+        \Bigl(\textstyle\sum_{\trace \in L_{\mathrm{train}}} |\trace|\Bigr)
+        \cdot m
+      \Bigr).
+  \]
+\end{proposition}
+
+\begin{proposition}[Distributed state space]\label{prop:dist-space}
+  Each node~$n_i$ searches
+  $S_{n_i} = Q_{n_i} \times \{0, \ldots, |\trace|_{n_i}|\}$.
+  The total effort is bounded by
+  \[
+    \textstyle\sum_{n_i \in \Nodes}
+      |Q_{n_i}| \cdot (|\trace|_{n_i}| + 1).
+  \]
+  Since both trie states and trace are partitioned,
+  $|Q_{n_i}| \ll |Q_c|$ and $|\trace|_{n_i}| \leq m$, so each local
+  product is substantially smaller than $|Q_c| \cdot m$.
+\end{proposition}
+
+\medskip\noindent
+\textbf{Cascading overhead.}\;
+The worst case produces a chain of $|\Nodes|$ sequential \GA{} calls,
+each blocking on its predecessor, yielding $O(|\Nodes|)$ sequential
+A$^{*}$ invocations.
+Caching (Definition~\ref{def:cache}) reduces repeated requests to
+amortised~$O(1)$.
+
+\medskip\noindent
+\textbf{Entry-point enumeration.}\;
+If $n_i$ has $E_i = |\ep(n_i)|$ entry points, the worst-case per-event
+effort is
+$O\bigl(E_i \cdot (|Q_{n_i}| \cdot |\trace|_{n_i}|
+  + C_{\mathrm{up}})\bigr)$,
+where $C_{\mathrm{up}}$ is the upstream cascade cost.
+
+\medskip\noindent
+In summary, the decomposition trades the monolithic space
+$|Q_c| \cdot m$ for a sum of smaller local spaces at the cost of
+inter-node communication.  It is most effective when
+(i) $|\Nodes|$ is moderate,
+(ii) activities are well-distributed ($|Q_{n_i}| \ll |Q_c|$), and
+(iii) the number of entry points~$E_i$ per node is bounded.
+\end{document}
